@@ -1,67 +1,222 @@
-# SpacetimeDB TypeScript Quickstart Chat
+# LiveShare SpacetimeDB
 
-This is a simple chat application that demonstrates how to use SpacetimeDB with TypeScript and React. The chat application is a simple chat room where users can send messages to each other. The chat application uses SpacetimeDB to store the chat messages.
+LiveShare is a minimal collaborative text editor built with React and SpacetimeDB. A user creates a space, shares the generated URL, and everyone who opens that URL can edit the same text document live.
 
-It is based directly on the plain React + TypeScript + Vite template. You can follow the quickstart guide for how creating this project from scratch at [SpacetimeDB TypeScript Quickstart](https://spacetimedb.com/docs/sdks/typescript/quickstart).
+The app is intentionally simple: each space stores one text document, and updates replace the whole document. This is a good MVP for experimenting with SpacetimeDB subscriptions and reducers, but it is not a conflict-free rich text editor.
 
-You can follow the instructions for creating your own SpacetimeDB module here: [SpacetimeDB Rust Module Quickstart](https://spacetimedb.com/docs/modules/rust/quickstart). Place the module in the `quickstart-chat/server` directory for compability with this project.
+## Features
 
-In order to run this example, you need to:
+- Create a random public text space from `/`.
+- Share URLs like `/:spaceId`.
+- Open an unknown `/:spaceId` and create it on demand.
+- Edit one shared textarea per space.
+- Sync text through SpacetimeDB table subscriptions.
+- Save edits through debounced reducer calls.
+- Copy the current share URL.
 
-- `pnpm build` in the root directory (`spacetimedb-typescriptsdk`)
-- `pnpm install` in this directory
-- `pnpm build` in this directory
-- `pnpm dev` in this directory to run the example
+## Tech Stack
 
-Below is copied from the original template README:
+- React 18
+- Vite
+- TypeScript
+- SpacetimeDB TypeScript SDK 2.2.0
+- Vitest and Testing Library
+- Bun for scripts and dependency management
 
-# React + TypeScript + Vite
+## Project Structure
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
-
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type aware lint rules:
-
-- Configure the top-level `parserOptions` property like this:
-
-```js
-export default tseslint.config({
-  languageOptions: {
-    // other options...
-    parserOptions: {
-      project: ['./tsconfig.node.json', './tsconfig.app.json'],
-      tsconfigRootDir: import.meta.dirname,
-    },
-  },
-});
+```text
+.
+├── spacetimedb/
+│   └── src/index.ts          # SpacetimeDB schema and reducers
+├── src/
+│   ├── App.tsx               # Landing page and shared editor UI
+│   ├── App.css               # App styles
+│   ├── main.tsx              # SpacetimeDB provider setup
+│   └── module_bindings/      # Generated SpacetimeDB TypeScript bindings
+├── docs/superpowers/         # Design and implementation planning docs
+├── spacetime.json            # SpacetimeDB project config
+└── spacetime.local.json      # Local DB config, ignored by git
 ```
 
-- Replace `tseslint.configs.recommended` to `tseslint.configs.recommendedTypeChecked` or `tseslint.configs.strictTypeChecked`
-- Optionally add `...tseslint.configs.stylisticTypeChecked`
-- Install [eslint-plugin-react](https://github.com/jsx-eslint/eslint-plugin-react) and update the config:
+## Architecture
 
-```js
-// eslint.config.js
-import react from 'eslint-plugin-react';
+SpacetimeDB is the source of truth for shared text. The React client never relies on reducer return values for persisted state. It subscribes to the current space row and renders whatever the subscription provides.
 
-export default tseslint.config({
-  // Set the react version
-  settings: { react: { version: '18.3' } },
-  plugins: {
-    // Add the react plugin
-    react,
-  },
-  rules: {
-    // other rules...
-    // Enable its recommended rules
-    ...react.configs.recommended.rules,
-    ...react.configs['jsx-runtime'].rules,
-  },
-});
+The MVP uses last-write-wins whole-document updates. When a user types, React updates local state immediately and sends `updateSpaceText` after a short debounce. Other clients receive the new text through their subscription.
+
+If two users edit at the same time, the latest reducer update wins. Future versions could add revisions, per-block updates, or CRDT-based editing if stronger concurrent editing semantics are needed.
+
+## SpacetimeDB Schema
+
+The module defines one public table, `space`:
+
+| Field | Type | Purpose |
+| --- | --- | --- |
+| `id` | `string` primary key | URL-safe space ID |
+| `text` | `string` | Current shared document text |
+| `createdAt` | `timestamp` | Space creation time |
+| `updatedAt` | `timestamp` | Last edit time |
+| `updatedBy` | `identity` | Last editor identity |
+
+Reducers:
+
+- `create_space({ id })` creates an empty space if it does not exist.
+- `update_space_text({ id, text })` replaces the current text and records the editor identity.
+
+Client reducer calls use generated camelCase accessors:
+
+```ts
+createSpace({ id: spaceId });
+updateSpaceText({ id: spaceId, text: localText });
 ```
+
+## Requirements
+
+- Bun
+- SpacetimeDB CLI
+- A running local SpacetimeDB server or access to SpacetimeDB Maincloud
+
+Check the CLI:
+
+```bash
+spacetime --version
+```
+
+## Install
+
+```bash
+bun install
+```
+
+## Local Development
+
+Start SpacetimeDB locally in one terminal:
+
+```bash
+spacetime start
+```
+
+Publish the module to the local server:
+
+```bash
+spacetime publish liveshare-db --clear-database -y --module-path spacetimedb --server local
+```
+
+Start the Vite dev server in another terminal:
+
+```bash
+bun run dev
+```
+
+Open the Vite URL, create a space, then open the same `/:spaceId` in another tab to test live updates.
+
+## Maincloud Development
+
+This repository's `spacetime.json` is configured for `maincloud` and database `liveshare-db`.
+
+Publish to the configured server:
+
+```bash
+spacetime publish liveshare-db --clear-database -y --module-path spacetimedb
+```
+
+If the frontend should connect to Maincloud instead of local SpacetimeDB, set `VITE_SPACETIMEDB_HOST` in `.env.local`.
+
+Example:
+
+```bash
+VITE_SPACETIMEDB_HOST=wss://maincloud.spacetimedb.com
+VITE_SPACETIMEDB_DB_NAME=liveshare-db
+```
+
+Use the websocket host expected by your SpacetimeDB deployment. The default frontend host is local: `ws://localhost:3000`.
+
+## Environment Variables
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `VITE_SPACETIMEDB_HOST` | `ws://localhost:3000` | SpacetimeDB websocket host |
+| `VITE_SPACETIMEDB_DB_NAME` | `liveshare-db` | Database name |
+
+Auth tokens are stored in `localStorage` under a key based on host and database name.
+
+## Regenerate Bindings
+
+Regenerate TypeScript bindings after changing `spacetimedb/src/index.ts`:
+
+```bash
+bun run spacetime:generate
+```
+
+If you need the project fallback script:
+
+```bash
+bun run generate
+```
+
+Do not edit files in `src/module_bindings/` by hand. They are generated from the SpacetimeDB module.
+
+## Test And Build
+
+Run tests:
+
+```bash
+bun run test
+```
+
+Build the frontend:
+
+```bash
+bun run build
+```
+
+Type-check the SpacetimeDB module directly:
+
+```bash
+bunx tsc --noEmit -p spacetimedb/tsconfig.json
+```
+
+## Troubleshooting
+
+### `External attempt to call nonexistent reducer "create_space" failed`
+
+The frontend is connected to a database whose published module does not include the latest reducer.
+
+Fixes:
+
+- Regenerate bindings after schema changes: `bun run spacetime:generate`.
+- Publish the updated module to the same database the frontend uses.
+- Confirm `VITE_SPACETIMEDB_DB_NAME` matches the database you published.
+- Confirm `VITE_SPACETIMEDB_HOST` points to the intended local or Maincloud server.
+
+### The app connects but no shared text appears
+
+Check that the space row exists or that the client can call `create_space`. Browser console errors from reducer calls usually indicate the database module is stale or the client is pointed at the wrong database.
+
+### `tsc not found` or wrong TypeScript compiler
+
+Use the real TypeScript package. This project uses `typescript`, not the unrelated `tsc` package.
+
+```bash
+bun install
+bunx tsc --noEmit -p spacetimedb/tsconfig.json
+```
+
+## Deployment Notes
+
+For a hosted deployment, deploy the Vite app with environment variables pointing at the same SpacetimeDB server and database where the module was published.
+
+The current module is public-by-link. Anyone with a space URL can view and edit that space.
+
+## Current Limitations
+
+- No permissions, accounts, or passcodes.
+- No edit history.
+- No rich text formatting.
+- Last-write-wins behavior can overwrite concurrent edits.
+- Text size is bounded server-side to protect reducer and subscription payloads.
+
+## License
+
+See `LICENSE`.
