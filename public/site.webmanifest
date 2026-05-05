@@ -1,0 +1,17 @@
+{
+  "name": "LiveShare",
+  "short_name": "LiveShare",
+  "description": "Create a public text space, share the link, and edit the same live document together in real time.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#eff6ff",
+  "theme_color": "#2563eb",
+  "icons": [
+    {
+      "src": "/liveshare.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

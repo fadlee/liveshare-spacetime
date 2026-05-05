@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="LiveShare">
+  <rect width="128" height="128" rx="28" fill="#2563eb" />
+  <path d="M28 36c0-6.6 5.4-12 12-12h48c6.6 0 12 5.4 12 12v56c0 6.6-5.4 12-12 12H40c-6.6 0-12-5.4-12-12V36Z" fill="#eff6ff" />
+  <path d="M45 47h38M45 64h38M45 81h24" stroke="#1d4ed8" stroke-width="8" stroke-linecap="round" />
+  <circle cx="92" cy="88" r="18" fill="#22c55e" />
+  <path d="M84 88h16M92 80v16" stroke="#f0fdf4" stroke-width="6" stroke-linecap="round" />
+</svg>
