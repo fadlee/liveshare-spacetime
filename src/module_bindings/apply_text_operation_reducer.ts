@@ -10,11 +10,14 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
-export default __t.row({
-  id: __t.string().primaryKey(),
-  text: __t.string(),
-  revision: __t.u64(),
-  createdAt: __t.timestamp().name("created_at"),
-  updatedAt: __t.timestamp().name("updated_at"),
-  updatedBy: __t.identity().name("updated_by"),
-});
+import {
+  TextOperation,
+} from "./types";
+
+export default {
+  id: __t.string(),
+  baseRevision: __t.u64(),
+  get operation() {
+    return TextOperation;
+  },
+};

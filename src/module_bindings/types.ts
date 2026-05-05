@@ -13,9 +13,33 @@ import {
 export const Space = __t.object("Space", {
   id: __t.string(),
   text: __t.string(),
+  revision: __t.u64(),
   createdAt: __t.timestamp(),
   updatedAt: __t.timestamp(),
   updatedBy: __t.identity(),
 });
 export type Space = __Infer<typeof Space>;
+
+export const TextDeleteOperation = __t.object("TextDeleteOperation", {
+  position: __t.u64(),
+  length: __t.u64(),
+});
+export type TextDeleteOperation = __Infer<typeof TextDeleteOperation>;
+
+export const TextInsertOperation = __t.object("TextInsertOperation", {
+  position: __t.u64(),
+  text: __t.string(),
+});
+export type TextInsertOperation = __Infer<typeof TextInsertOperation>;
+
+// The tagged union or sum type for the algebraic type `TextOperation`.
+export const TextOperation = __t.enum("TextOperation", {
+  get Insert() {
+    return TextInsertOperation;
+  },
+  get Delete() {
+    return TextDeleteOperation;
+  },
+});
+export type TextOperation = __Infer<typeof TextOperation>;
 

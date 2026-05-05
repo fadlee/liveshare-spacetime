@@ -1,18 +1,17 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 
 const createSpaceMock = vi.fn(() => Promise.resolve());
-const updateSpaceTextMock = vi.fn(() => Promise.resolve());
-let resolveCreateSpace: (() => void) | null = null;
+const applyTextOperationMock = vi.fn(() => Promise.resolve());
 let mockPathname = '/';
-let mockSpaces: Array<{ id: string; text: string }> = [];
+let mockSpaces: Array<{ id: string; text: string; revision: bigint }> = [];
 
 vi.mock('./module_bindings', () => ({
   reducers: {
     createSpace: 'createSpace',
-    updateSpaceText: 'updateSpaceText',
+    applyTextOperation: 'applyTextOperation',
   },
   tables: {
     space: {
@@ -28,7 +27,7 @@ vi.mock('spacetimedb/react', () => ({
   }),
   useReducer: (reducer: string) => {
     if (reducer === 'createSpace') return createSpaceMock;
-    if (reducer === 'updateSpaceText') return updateSpaceTextMock;
+    if (reducer === 'applyTextOperation') return applyTextOperationMock;
     throw new Error(`Unexpected reducer ${reducer}`);
   },
   useTable: () => [mockSpaces, false],
@@ -50,8 +49,7 @@ describe('App', () => {
   beforeEach(() => {
     vi.useRealTimers();
     createSpaceMock.mockClear();
-    updateSpaceTextMock.mockClear();
-    resolveCreateSpace = null;
+    applyTextOperationMock.mockClear();
     mockPathname = '/';
     mockSpaces = [];
     vi.spyOn(window.history, 'pushState').mockImplementation(
@@ -91,38 +89,6 @@ describe('App', () => {
     ).toBeEnabled();
   });
 
-  it('allows editing immediately after creating a space', async () => {
-    const user = userEvent.setup();
-    createSpaceMock.mockImplementationOnce(
-      () =>
-        new Promise<void>(resolve => {
-          resolveCreateSpace = resolve;
-        })
-    );
-
-    render(<App />);
-
-    await user.click(screen.getByRole('button', { name: /create space/i }));
-
-    const editor = screen.getByRole('textbox', {
-      name: /shared text editor/i,
-    });
-    expect(editor).toBeEnabled();
-
-    await user.type(editor, 'First draft');
-
-    expect(updateSpaceTextMock).not.toHaveBeenCalled();
-
-    resolveCreateSpace?.();
-
-    await waitFor(() => {
-      expect(updateSpaceTextMock).toHaveBeenLastCalledWith({
-        id: expect.stringMatching(/^[A-Za-z0-9_-]{12}$/),
-        text: 'First draft',
-      });
-    });
-  });
-
   it('creates a missing space when opening a shared URL', async () => {
     mockPathname = '/abc123';
 
@@ -133,46 +99,99 @@ describe('App', () => {
     );
   });
 
-  it('saves textarea edits with reducer object syntax', async () => {
+  it('sends insert operations while typing immediately after creating a space', async () => {
     const user = userEvent.setup();
-    mockPathname = '/abc123';
-    mockSpaces = [{ id: 'abc123', text: 'Initial text' }];
 
     render(<App />);
+
+    await user.click(screen.getByRole('button', { name: /create space/i }));
     const editor = screen.getByRole('textbox', { name: /shared text editor/i });
 
-    await user.clear(editor);
-    await user.type(editor, 'Shared update');
+    expect(editor).toBeEnabled();
+    await user.type(editor, 'A');
 
     await waitFor(() => {
-      expect(updateSpaceTextMock).toHaveBeenLastCalledWith({
-        id: 'abc123',
-        text: 'Shared update',
+      expect(applyTextOperationMock).toHaveBeenCalledWith({
+        id: expect.stringMatching(/^[A-Za-z0-9_-]{12}$/),
+        baseRevision: 0n,
+        operation: { tag: 'Insert', value: { position: 0n, text: 'A' } },
       });
     });
   });
 
-  it('creates the space and retries once when saving finds no space', async () => {
+  it('sends delete operations for removed text', async () => {
     const user = userEvent.setup();
     mockPathname = '/abc123';
-    mockSpaces = [{ id: 'abc123', text: 'Initial text' }];
-    updateSpaceTextMock
-      .mockRejectedValueOnce(new Error('SenderError: Space not found'))
-      .mockResolvedValueOnce(undefined);
+    mockSpaces = [{ id: 'abc123', text: 'abc', revision: 3n }];
 
     render(<App />);
-    const editor = screen.getByRole('textbox', { name: /shared text editor/i });
+    const editor = screen.getByRole('textbox', {
+      name: /shared text editor/i,
+    }) as HTMLTextAreaElement;
 
-    await user.clear(editor);
-    await user.type(editor, 'Recovered update');
+    await user.click(editor);
+    editor.setSelectionRange(3, 3);
+    await user.keyboard('{Backspace}');
 
     await waitFor(() => {
-      expect(createSpaceMock).toHaveBeenCalledWith({ id: 'abc123' });
-      expect(updateSpaceTextMock).toHaveBeenLastCalledWith({
+      expect(applyTextOperationMock).toHaveBeenCalledWith({
         id: 'abc123',
-        text: 'Recovered update',
+        baseRevision: 3n,
+        operation: { tag: 'Delete', value: { position: 2n, length: 1n } },
       });
-      expect(updateSpaceTextMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('does not overwrite local text while an operation is pending', async () => {
+    const user = userEvent.setup();
+    let resolveOperation: (() => void) | null = null;
+    applyTextOperationMock.mockImplementationOnce(
+      () =>
+        new Promise<void>(resolve => {
+          resolveOperation = resolve;
+        })
+    );
+    mockPathname = '/abc123';
+    mockSpaces = [{ id: 'abc123', text: 'hello', revision: 1n }];
+
+    const { rerender } = render(<App />);
+    const editor = screen.getByRole('textbox', { name: /shared text editor/i });
+
+    await user.type(editor, '!');
+    expect(editor).toHaveValue('hello!');
+
+    mockSpaces = [{ id: 'abc123', text: 'hello', revision: 1n }];
+    rerender(<App />);
+
+    expect(editor).toHaveValue('hello!');
+    await act(async () => {
+      resolveOperation?.();
+    });
+  });
+
+  it('replays pending text after a revision conflict', async () => {
+    const user = userEvent.setup();
+    applyTextOperationMock
+      .mockRejectedValueOnce(new Error('SenderError: Revision conflict'))
+      .mockResolvedValueOnce(undefined);
+    mockPathname = '/abc123';
+    mockSpaces = [{ id: 'abc123', text: 'hello', revision: 1n }];
+
+    const { rerender } = render(<App />);
+    const editor = screen.getByRole('textbox', { name: /shared text editor/i });
+
+    await user.type(editor, '!');
+
+    mockSpaces = [{ id: 'abc123', text: 'hello remote', revision: 2n }];
+    rerender(<App />);
+
+    await waitFor(() => {
+      expect(editor).toHaveValue('hello! remote');
+      expect(applyTextOperationMock).toHaveBeenLastCalledWith({
+        id: 'abc123',
+        baseRevision: 2n,
+        operation: { tag: 'Insert', value: { position: 5n, text: '!' } },
+      });
     });
   });
 });

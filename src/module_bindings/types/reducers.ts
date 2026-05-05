@@ -6,9 +6,11 @@
 import { type Infer as __Infer } from "spacetimedb";
 
 // Import all reducer arg schemas
+import ApplyTextOperationReducer from "../apply_text_operation_reducer";
 import CreateSpaceReducer from "../create_space_reducer";
 import UpdateSpaceTextReducer from "../update_space_text_reducer";
 
+export type ApplyTextOperationParams = __Infer<typeof ApplyTextOperationReducer>;
 export type CreateSpaceParams = __Infer<typeof CreateSpaceReducer>;
 export type UpdateSpaceTextParams = __Infer<typeof UpdateSpaceTextReducer>;
 

@@ -2,11 +2,17 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
 import { reducers, tables } from './module_bindings';
 import { useReducer, useSpacetimeDB, useTable } from 'spacetimedb/react';
+import {
+  createOperationsFromChange,
+  replayOperations,
+  type ClientTextOperation,
+} from './textOperations';
 
-const SAVE_DELAY_MS = 400;
 const SPACE_ID_LENGTH = 12;
 const SPACE_ID_CHARS =
   'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-';
+
+type SyncStatus = 'live' | 'syncing' | 'offline' | 'error';
 
 function generateSpaceId() {
   const bytes = new Uint8Array(SPACE_ID_LENGTH);
@@ -22,24 +28,24 @@ function getSpaceIdFromPath() {
   return path || null;
 }
 
-function isSpaceNotFound(error: unknown) {
-  return error instanceof Error && error.message.includes('Space not found');
+function isRevisionConflict(error: unknown) {
+  return error instanceof Error && error.message.includes('Revision conflict');
 }
 
 function App() {
   const { identity, isActive: connected } = useSpacetimeDB();
   const createSpace = useReducer(reducers.createSpace);
-  const updateSpaceText = useReducer(reducers.updateSpaceText);
+  const applyTextOperation = useReducer(reducers.applyTextOperation);
   const [spaceId, setSpaceId] = useState(() => getSpaceIdFromPath());
   const [localText, setLocalText] = useState('');
-  const [saveStatus, setSaveStatus] = useState<
-    'idle' | 'saving' | 'saved' | 'error'
-  >('idle');
-  const [createdSpaceId, setCreatedSpaceId] = useState<string | null>(null);
-  const [pendingCreateSpaceId, setPendingCreateSpaceId] = useState<
-    string | null
-  >(null);
-  const lastServerText = useRef('');
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>('offline');
+  const [queueVersion, setQueueVersion] = useState(0);
+  const knownRevision = useRef(0n);
+  const latestServerText = useRef('');
+  const latestServerRevision = useRef(0n);
+  const pendingOps = useRef<ClientTextOperation[]>([]);
+  const sendInFlight = useRef(false);
+  const waitingForConflictBaseline = useRef(false);
   const hasRequestedCreate = useRef<string | null>(null);
 
   const spaceQuery = useMemo(() => {
@@ -50,7 +56,9 @@ function App() {
 
   const [spaces, spacesLoading] = useTable(spaceQuery);
   const space = spaceId ? spaces.find(row => row.id === spaceId) : undefined;
-  const canEdit = Boolean(space || (spaceId && createdSpaceId === spaceId));
+  const canEdit = Boolean(spaceId && identity);
+
+  const markQueueChanged = () => setQueueVersion(version => version + 1);
 
   useEffect(() => {
     const onPopState = () => setSpaceId(getSpaceIdFromPath());
@@ -59,83 +67,120 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!space) return;
-    if (space.text === lastServerText.current) return;
-    lastServerText.current = space.text;
-    setLocalText(space.text);
-    setSaveStatus('saved');
-  }, [space]);
+    pendingOps.current = [];
+    sendInFlight.current = false;
+    waitingForConflictBaseline.current = false;
+    knownRevision.current = 0n;
+    latestServerRevision.current = 0n;
+    latestServerText.current = '';
+    setLocalText('');
+    markQueueChanged();
+  }, [spaceId]);
 
   useEffect(() => {
     if (!connected || !identity || !spaceId || spacesLoading || space) return;
     if (hasRequestedCreate.current === spaceId) return;
 
     hasRequestedCreate.current = spaceId;
-    if (createdSpaceId === spaceId) setPendingCreateSpaceId(spaceId);
-    createSpace({ id: spaceId })
-      .then(() => setPendingCreateSpaceId(null))
-      .catch(error => {
-        console.error('Failed to create space:', error);
-        hasRequestedCreate.current = null;
-        setPendingCreateSpaceId(null);
-        setSaveStatus('error');
-      });
-  }, [
-    connected,
-    createSpace,
-    createdSpaceId,
-    identity,
-    space,
-    spaceId,
-    spacesLoading,
-  ]);
+    createSpace({ id: spaceId }).catch(error => {
+      console.error('Failed to create space:', error);
+      hasRequestedCreate.current = null;
+      setSyncStatus('error');
+    });
+  }, [connected, createSpace, identity, space, spaceId, spacesLoading]);
 
   useEffect(() => {
-    if (!connected || !spaceId || !canEdit) return;
-    if (pendingCreateSpaceId === spaceId) return;
-    if (localText === lastServerText.current) return;
+    if (!space) return;
+    if (space.revision < latestServerRevision.current) return;
 
-    setSaveStatus('saving');
-    const timeout = window.setTimeout(() => {
-      updateSpaceText({ id: spaceId, text: localText })
-        .then(() => setSaveStatus('saved'))
-        .catch(error => {
-          if (isSpaceNotFound(error)) {
-            createSpace({ id: spaceId })
-              .then(() => updateSpaceText({ id: spaceId, text: localText }))
-              .then(() => setSaveStatus('saved'))
-              .catch(retryError => {
-                console.error('Failed to save text:', retryError);
-                setSaveStatus('error');
-              });
-            return;
+    latestServerText.current = space.text;
+    latestServerRevision.current = space.revision;
+
+    if (pendingOps.current.length === 0 && !sendInFlight.current) {
+      knownRevision.current = space.revision;
+      setLocalText(space.text);
+      setSyncStatus(connected ? 'live' : 'offline');
+      return;
+    }
+
+    if (
+      waitingForConflictBaseline.current &&
+      space.revision > knownRevision.current
+    ) {
+      knownRevision.current = space.revision;
+      waitingForConflictBaseline.current = false;
+      setLocalText(replayOperations(space.text, pendingOps.current));
+      sendInFlight.current = false;
+      markQueueChanged();
+    }
+  }, [connected, space]);
+
+  useEffect(() => {
+    if (!connected) {
+      setSyncStatus('offline');
+      return;
+    }
+    if (!spaceId || sendInFlight.current || waitingForConflictBaseline.current) {
+      return;
+    }
+    const operation = pendingOps.current[0];
+    if (!operation) {
+      setSyncStatus('live');
+      return;
+    }
+
+    sendInFlight.current = true;
+    setSyncStatus('syncing');
+    applyTextOperation({
+      id: spaceId,
+      baseRevision: knownRevision.current,
+      operation,
+    })
+      .then(() => {
+        pendingOps.current = pendingOps.current.slice(1);
+        knownRevision.current += 1n;
+        sendInFlight.current = false;
+        markQueueChanged();
+      })
+      .catch(error => {
+        sendInFlight.current = false;
+        if (isRevisionConflict(error)) {
+          if (latestServerRevision.current > knownRevision.current) {
+            knownRevision.current = latestServerRevision.current;
+            setLocalText(
+              replayOperations(latestServerText.current, pendingOps.current)
+            );
+            markQueueChanged();
+          } else {
+            waitingForConflictBaseline.current = true;
+            setSyncStatus('syncing');
           }
+          return;
+        }
 
-          console.error('Failed to save text:', error);
-          setSaveStatus('error');
-        });
-    }, SAVE_DELAY_MS);
-
-    return () => window.clearTimeout(timeout);
-  }, [
-    canEdit,
-    connected,
-    createSpace,
-    localText,
-    pendingCreateSpaceId,
-    spaceId,
-    updateSpaceText,
-  ]);
+        console.error('Failed to apply text operation:', error);
+        setSyncStatus('error');
+      });
+  }, [applyTextOperation, connected, queueVersion, spaceId]);
 
   const createNewSpace = () => {
     const id = generateSpaceId();
     window.history.pushState(null, '', `/${id}`);
-    setCreatedSpaceId(id);
     setSpaceId(id);
   };
 
   const copyShareUrl = async () => {
     await navigator.clipboard.writeText(window.location.href);
+  };
+
+  const handleTextChange = (nextText: string) => {
+    const operations = createOperationsFromChange(localText, nextText);
+    setLocalText(nextText);
+    if (operations.length === 0) return;
+
+    pendingOps.current = [...pendingOps.current, ...operations];
+    setSyncStatus(connected ? 'syncing' : 'offline');
+    markQueueChanged();
   };
 
   if (!connected || !identity) {
@@ -173,20 +218,16 @@ function App() {
           <h1>{spaceId}</h1>
         </div>
         <div className="header-actions">
-          <span className={`save-status ${saveStatus}`}>
-            {saveStatus === 'idle' ? 'Ready' : saveStatus}
-          </span>
+          <span className={`save-status ${syncStatus}`}>{syncStatus}</span>
           <button onClick={copyShareUrl}>Copy Link</button>
         </div>
       </header>
-
-      {!canEdit && <p className="loading-note">Creating shared space...</p>}
 
       <textarea
         className="shared-editor"
         aria-label="shared text editor"
         value={localText}
-        onChange={event => setLocalText(event.target.value)}
+        onChange={event => handleTextChange(event.target.value)}
         placeholder="Start typing here. Everyone with this link can edit."
         disabled={!canEdit}
       />

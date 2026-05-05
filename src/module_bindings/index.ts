@@ -34,6 +34,7 @@ import {
 } from "spacetimedb";
 
 // Import all reducer arg schemas
+import ApplyTextOperationReducer from "./apply_text_operation_reducer";
 import CreateSpaceReducer from "./create_space_reducer";
 import UpdateSpaceTextReducer from "./update_space_text_reducer";
 
@@ -61,6 +62,7 @@ const tablesSchema = __schema({
 
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
+  __reducerSchema("apply_text_operation", ApplyTextOperationReducer),
   __reducerSchema("create_space", CreateSpaceReducer),
   __reducerSchema("update_space_text", UpdateSpaceTextReducer),
 );
