@@ -32,6 +32,9 @@ function App() {
     'idle' | 'saving' | 'saved' | 'error'
   >('idle');
   const [createdSpaceId, setCreatedSpaceId] = useState<string | null>(null);
+  const [pendingCreateSpaceId, setPendingCreateSpaceId] = useState<
+    string | null
+  >(null);
   const lastServerText = useRef('');
   const hasRequestedCreate = useRef<string | null>(null);
 
@@ -64,15 +67,28 @@ function App() {
     if (hasRequestedCreate.current === spaceId) return;
 
     hasRequestedCreate.current = spaceId;
-    createSpace({ id: spaceId }).catch(error => {
-      console.error('Failed to create space:', error);
-      hasRequestedCreate.current = null;
-      setSaveStatus('error');
-    });
-  }, [connected, createSpace, identity, space, spaceId, spacesLoading]);
+    if (createdSpaceId === spaceId) setPendingCreateSpaceId(spaceId);
+    createSpace({ id: spaceId })
+      .then(() => setPendingCreateSpaceId(null))
+      .catch(error => {
+        console.error('Failed to create space:', error);
+        hasRequestedCreate.current = null;
+        setPendingCreateSpaceId(null);
+        setSaveStatus('error');
+      });
+  }, [
+    connected,
+    createSpace,
+    createdSpaceId,
+    identity,
+    space,
+    spaceId,
+    spacesLoading,
+  ]);
 
   useEffect(() => {
     if (!connected || !spaceId || !canEdit) return;
+    if (pendingCreateSpaceId === spaceId) return;
     if (localText === lastServerText.current) return;
 
     setSaveStatus('saving');
@@ -86,7 +102,14 @@ function App() {
     }, SAVE_DELAY_MS);
 
     return () => window.clearTimeout(timeout);
-  }, [canEdit, connected, localText, spaceId, updateSpaceText]);
+  }, [
+    canEdit,
+    connected,
+    localText,
+    pendingCreateSpaceId,
+    spaceId,
+    updateSpaceText,
+  ]);
 
   const createNewSpace = () => {
     const id = generateSpaceId();

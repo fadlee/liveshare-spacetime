@@ -5,6 +5,7 @@ import App from './App';
 
 const createSpaceMock = vi.fn(() => Promise.resolve());
 const updateSpaceTextMock = vi.fn(() => Promise.resolve());
+let resolveCreateSpace: (() => void) | null = null;
 let mockPathname = '/';
 let mockSpaces: Array<{ id: string; text: string }> = [];
 
@@ -50,6 +51,7 @@ describe('App', () => {
     vi.useRealTimers();
     createSpaceMock.mockClear();
     updateSpaceTextMock.mockClear();
+    resolveCreateSpace = null;
     mockPathname = '/';
     mockSpaces = [];
     vi.spyOn(window.history, 'pushState').mockImplementation(
@@ -91,6 +93,12 @@ describe('App', () => {
 
   it('allows editing immediately after creating a space', async () => {
     const user = userEvent.setup();
+    createSpaceMock.mockImplementationOnce(
+      () =>
+        new Promise<void>(resolve => {
+          resolveCreateSpace = resolve;
+        })
+    );
 
     render(<App />);
 
@@ -102,6 +110,10 @@ describe('App', () => {
     expect(editor).toBeEnabled();
 
     await user.type(editor, 'First draft');
+
+    expect(updateSpaceTextMock).not.toHaveBeenCalled();
+
+    resolveCreateSpace?.();
 
     await waitFor(() => {
       expect(updateSpaceTextMock).toHaveBeenLastCalledWith({
