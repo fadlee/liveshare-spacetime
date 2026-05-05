@@ -6,7 +6,7 @@ vi.mock('spacetimedb/server', () => {
 
   const t = {
     string: () => ({ primaryKey: () => ({}) }),
-    u64: () => ({}),
+    u64: () => ({ default: () => ({}) }),
     timestamp: () => ({}),
     identity: () => ({}),
     object: (_name: string, shape: unknown) => shape,

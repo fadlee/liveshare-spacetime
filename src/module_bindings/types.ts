@@ -13,10 +13,10 @@ import {
 export const Space = __t.object("Space", {
   id: __t.string(),
   text: __t.string(),
-  revision: __t.u64(),
   createdAt: __t.timestamp(),
   updatedAt: __t.timestamp(),
   updatedBy: __t.identity(),
+  revision: __t.u64(),
 });
 export type Space = __Infer<typeof Space>;
 

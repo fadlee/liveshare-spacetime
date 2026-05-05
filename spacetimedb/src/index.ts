@@ -30,10 +30,10 @@ const space = table(
   {
     id: t.string().primaryKey(),
     text: t.string(),
-    revision: t.u64(),
     createdAt: t.timestamp(),
     updatedAt: t.timestamp(),
     updatedBy: t.identity(),
+    revision: t.u64().default(0n),
   }
 );
 

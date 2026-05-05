@@ -13,8 +13,8 @@ import {
 export default __t.row({
   id: __t.string().primaryKey(),
   text: __t.string(),
-  revision: __t.u64(),
   createdAt: __t.timestamp().name("created_at"),
   updatedAt: __t.timestamp().name("updated_at"),
   updatedBy: __t.identity().name("updated_by"),
+  revision: __t.u64(),
 });
