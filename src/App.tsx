@@ -31,6 +31,7 @@ function App() {
   const [saveStatus, setSaveStatus] = useState<
     'idle' | 'saving' | 'saved' | 'error'
   >('idle');
+  const [createdSpaceId, setCreatedSpaceId] = useState<string | null>(null);
   const lastServerText = useRef('');
   const hasRequestedCreate = useRef<string | null>(null);
 
@@ -42,6 +43,7 @@ function App() {
 
   const [spaces, spacesLoading] = useTable(spaceQuery);
   const space = spaceId ? spaces.find(row => row.id === spaceId) : undefined;
+  const canEdit = Boolean(space || (spaceId && createdSpaceId === spaceId));
 
   useEffect(() => {
     const onPopState = () => setSpaceId(getSpaceIdFromPath());
@@ -70,7 +72,7 @@ function App() {
   }, [connected, createSpace, identity, space, spaceId, spacesLoading]);
 
   useEffect(() => {
-    if (!connected || !spaceId || !space) return;
+    if (!connected || !spaceId || !canEdit) return;
     if (localText === lastServerText.current) return;
 
     setSaveStatus('saving');
@@ -84,11 +86,12 @@ function App() {
     }, SAVE_DELAY_MS);
 
     return () => window.clearTimeout(timeout);
-  }, [connected, localText, space, spaceId, updateSpaceText]);
+  }, [canEdit, connected, localText, spaceId, updateSpaceText]);
 
   const createNewSpace = () => {
     const id = generateSpaceId();
     window.history.pushState(null, '', `/${id}`);
+    setCreatedSpaceId(id);
     setSpaceId(id);
   };
 
@@ -138,7 +141,7 @@ function App() {
         </div>
       </header>
 
-      {!space && <p className="loading-note">Creating shared space...</p>}
+      {!canEdit && <p className="loading-note">Creating shared space...</p>}
 
       <textarea
         className="shared-editor"
@@ -146,7 +149,7 @@ function App() {
         value={localText}
         onChange={event => setLocalText(event.target.value)}
         placeholder="Start typing here. Everyone with this link can edit."
-        disabled={!space}
+        disabled={!canEdit}
       />
     </main>
   );

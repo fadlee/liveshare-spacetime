@@ -86,7 +86,29 @@ describe('App', () => {
     );
     expect(
       screen.getByRole('textbox', { name: /shared text editor/i })
-    ).toBeDisabled();
+    ).toBeEnabled();
+  });
+
+  it('allows editing immediately after creating a space', async () => {
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: /create space/i }));
+
+    const editor = screen.getByRole('textbox', {
+      name: /shared text editor/i,
+    });
+    expect(editor).toBeEnabled();
+
+    await user.type(editor, 'First draft');
+
+    await waitFor(() => {
+      expect(updateSpaceTextMock).toHaveBeenLastCalledWith({
+        id: expect.stringMatching(/^[A-Za-z0-9_-]{12}$/),
+        text: 'First draft',
+      });
+    });
   });
 
   it('creates a missing space when opening a shared URL', async () => {
