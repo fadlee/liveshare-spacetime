@@ -3,11 +3,12 @@
 
 /* eslint-disable */
 /* tslint:disable */
-import { type Infer as __Infer } from 'spacetimedb';
+import { type Infer as __Infer } from "spacetimedb";
 
 // Import all reducer arg schemas
-import SendMessageReducer from '../send_message_reducer';
-import SetNameReducer from '../set_name_reducer';
+import CreateSpaceReducer from "../create_space_reducer";
+import UpdateSpaceTextReducer from "../update_space_text_reducer";
 
-export type SendMessageParams = __Infer<typeof SendMessageReducer>;
-export type SetNameParams = __Infer<typeof SetNameReducer>;
+export type CreateSpaceParams = __Infer<typeof CreateSpaceReducer>;
+export type UpdateSpaceTextParams = __Infer<typeof UpdateSpaceTextReducer>;
+

@@ -8,8 +8,12 @@ import {
   t as __t,
   type AlgebraicTypeType as __AlgebraicTypeType,
   type Infer as __Infer,
-} from 'spacetimedb';
+} from "spacetimedb";
 
-export default {
+export default __t.row({
+  id: __t.string().primaryKey(),
   text: __t.string(),
-};
+  createdAt: __t.timestamp().name("created_at"),
+  updatedAt: __t.timestamp().name("updated_at"),
+  updatedBy: __t.identity().name("updated_by"),
+});

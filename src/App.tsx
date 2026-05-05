@@ -1,234 +1,154 @@
-import React, { useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
-import { tables, reducers } from './module_bindings';
-import type * as Types from './module_bindings/types';
-import { useSpacetimeDB, useTable, useReducer } from 'spacetimedb/react';
-import { Identity, Timestamp } from 'spacetimedb';
+import { reducers, tables } from './module_bindings';
+import { useReducer, useSpacetimeDB, useTable } from 'spacetimedb/react';
 
-export type PrettyMessage = {
-  senderName: string;
-  text: string;
-  sent: Timestamp;
-  kind: 'system' | 'user';
-};
+const SAVE_DELAY_MS = 400;
+const SPACE_ID_LENGTH = 12;
+const SPACE_ID_CHARS =
+  'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-';
+
+function generateSpaceId() {
+  const bytes = new Uint8Array(SPACE_ID_LENGTH);
+  crypto.getRandomValues(bytes);
+  return Array.from(
+    bytes,
+    byte => SPACE_ID_CHARS[byte % SPACE_ID_CHARS.length]
+  ).join('');
+}
+
+function getSpaceIdFromPath() {
+  const path = window.location.pathname.replace(/^\/+|\/+$/g, '');
+  return path || null;
+}
 
 function App() {
-  const [newName, setNewName] = useState('');
-  const [settingName, setSettingName] = useState(false);
-  const [systemMessages, setSystemMessages] = useState([] as Types.Message[]);
-  const [newMessage, setNewMessage] = useState('');
-
   const { identity, isActive: connected } = useSpacetimeDB();
-  const setName = useReducer(reducers.setName);
-  const sendMessage = useReducer(reducers.sendMessage);
+  const createSpace = useReducer(reducers.createSpace);
+  const updateSpaceText = useReducer(reducers.updateSpaceText);
+  const [spaceId, setSpaceId] = useState(() => getSpaceIdFromPath());
+  const [localText, setLocalText] = useState('');
+  const [saveStatus, setSaveStatus] = useState<
+    'idle' | 'saving' | 'saved' | 'error'
+  >('idle');
+  const lastServerText = useRef('');
+  const hasRequestedCreate = useRef<string | null>(null);
 
-  // Subscribe to all messages in the chat
-  const [messages] = useTable(tables.message);
+  const spaceQuery = useMemo(() => {
+    return spaceId
+      ? tables.space.where(row => row.id.eq(spaceId))
+      : tables.space.where(row => row.id.eq('__unused__'));
+  }, [spaceId]);
 
-  // Subscribe to all online users in the chat
-  const [onlineUsers] = useTable(
-    tables.user.where(r => r.online.eq(true)),
-    {
-      onInsert: user => {
-        // All users being inserted here are online
-        const name = user.name || user.identity.toHexString().substring(0, 8);
-        setSystemMessages(prev => [
-          ...prev,
-          {
-            sender: Identity.zero(),
-            text: `${name} has connected.`,
-            sent: Timestamp.now(),
-          },
-        ]);
-      },
-      onDelete: user => {
-        // All users being deleted here are offline
-        const name = user.name || user.identity.toHexString().substring(0, 8);
-        setSystemMessages(prev => [
-          ...prev,
-          {
-            sender: Identity.zero(),
-            text: `${name} has disconnected.`,
-            sent: Timestamp.now(),
-          },
-        ]);
-      },
-    }
-  );
+  const [spaces, spacesLoading] = useTable(spaceQuery);
+  const space = spaceId ? spaces.find(row => row.id === spaceId) : undefined;
 
-  const [offlineUsers] = useTable(tables.user.where(r => r.online.eq(false)));
-  const users = [...onlineUsers, ...offlineUsers];
+  useEffect(() => {
+    const onPopState = () => setSpaceId(getSpaceIdFromPath());
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
 
-  const prettyMessages: PrettyMessage[] = messages
-    .concat(systemMessages)
-    .sort((a, b) => (a.sent.toDate() > b.sent.toDate() ? 1 : -1))
-    .map(message => {
-      const user = users.find(
-        u => u.identity.toHexString() === message.sender.toHexString()
-      );
-      return {
-        senderName: user?.name || message.sender.toHexString().substring(0, 8),
-        text: message.text,
-        sent: message.sent,
-        kind: Identity.zero().isEqual(message.sender) ? 'system' : 'user',
-      };
+  useEffect(() => {
+    if (!space) return;
+    if (space.text === lastServerText.current) return;
+    lastServerText.current = space.text;
+    setLocalText(space.text);
+    setSaveStatus('saved');
+  }, [space]);
+
+  useEffect(() => {
+    if (!connected || !identity || !spaceId || spacesLoading || space) return;
+    if (hasRequestedCreate.current === spaceId) return;
+
+    hasRequestedCreate.current = spaceId;
+    createSpace({ id: spaceId }).catch(error => {
+      console.error('Failed to create space:', error);
+      hasRequestedCreate.current = null;
+      setSaveStatus('error');
     });
+  }, [connected, createSpace, identity, space, spaceId, spacesLoading]);
 
-  console.log('connected:', connected, 'identity:', identity?.toHexString());
+  useEffect(() => {
+    if (!connected || !spaceId || !space) return;
+    if (localText === lastServerText.current) return;
+
+    setSaveStatus('saving');
+    const timeout = window.setTimeout(() => {
+      updateSpaceText({ id: spaceId, text: localText })
+        .then(() => setSaveStatus('saved'))
+        .catch(error => {
+          console.error('Failed to save text:', error);
+          setSaveStatus('error');
+        });
+    }, SAVE_DELAY_MS);
+
+    return () => window.clearTimeout(timeout);
+  }, [connected, localText, space, spaceId, updateSpaceText]);
+
+  const createNewSpace = () => {
+    const id = generateSpaceId();
+    window.history.pushState(null, '', `/${id}`);
+    setSpaceId(id);
+  };
+
+  const copyShareUrl = async () => {
+    await navigator.clipboard.writeText(window.location.href);
+  };
 
   if (!connected || !identity) {
     return (
-      <div className="App">
+      <main className="app-shell centered">
+        <p className="eyebrow">LiveShare</p>
         <h1>Connecting...</h1>
-      </div>
+      </main>
     );
   }
 
-  const name = (() => {
-    const user = users.find(u => u.identity.isEqual(identity));
-    return user?.name || identity?.toHexString().substring(0, 8) || '';
-  })();
-
-  const onSubmitNewName = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    setSettingName(false);
-    setName({ name: newName });
-  };
-
-  const onSubmitMessage = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    setNewMessage('');
-    sendMessage({ text: newMessage })
-      .then(() => {
-        console.log('Message sent.');
-      })
-      .catch(err => {
-        console.error('Error sending message:', err);
-      });
-  };
+  if (!spaceId) {
+    return (
+      <main className="app-shell landing">
+        <section className="hero-card">
+          <p className="eyebrow">LiveShare</p>
+          <h1>Share a URL. Edit text together.</h1>
+          <p className="subtitle">
+            Create a public text space, send the link, and everyone on the URL
+            sees the same live document.
+          </p>
+          <button className="primary-action" onClick={createNewSpace}>
+            Create Space
+          </button>
+        </section>
+      </main>
+    );
+  }
 
   return (
-    <div className="App">
-      <div className="profile">
-        <h1>Profile</h1>
-        {!settingName ? (
-          <>
-            <p>{name}</p>
-            <button
-              onClick={() => {
-                setSettingName(true);
-                setNewName(name);
-              }}
-            >
-              Edit Name
-            </button>
-          </>
-        ) : (
-          <form onSubmit={onSubmitNewName}>
-            <input
-              type="text"
-              aria-label="username input"
-              value={newName}
-              onChange={e => setNewName(e.target.value)}
-            />
-            <button type="submit">Submit</button>
-          </form>
-        )}
-      </div>
-      <div className="message-panel">
-        <h1>Messages</h1>
-        {prettyMessages.length < 1 && <p>No messages</p>}
-        <div className="messages">
-          {prettyMessages.map((message, key) => {
-            const sentDate = message.sent.toDate();
-            const now = new Date();
-            const isOlderThanDay =
-              now.getFullYear() !== sentDate.getFullYear() ||
-              now.getMonth() !== sentDate.getMonth() ||
-              now.getDate() !== sentDate.getDate();
-
-            const timeString = sentDate.toLocaleTimeString([], {
-              hour: '2-digit',
-              minute: '2-digit',
-            });
-            const dateString = isOlderThanDay
-              ? sentDate.toLocaleDateString([], {
-                  year: 'numeric',
-                  month: 'short',
-                  day: 'numeric',
-                }) + ' '
-              : '';
-
-            return (
-              <div
-                key={key}
-                className={
-                  message.kind === 'system' ? 'system-message' : 'user-message'
-                }
-              >
-                <p>
-                  <b>
-                    {message.kind === 'system' ? 'System' : message.senderName}
-                  </b>
-                  <span
-                    style={{
-                      fontSize: '0.8rem',
-                      marginLeft: '0.5rem',
-                      color: '#666',
-                    }}
-                  >
-                    {dateString}
-                    {timeString}
-                  </span>
-                </p>
-                <p>{message.text}</p>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-      <div className="online" style={{ whiteSpace: 'pre-wrap' }}>
-        <h1>Online</h1>
+    <main className="app-shell editor-page">
+      <header className="editor-header">
         <div>
-          {onlineUsers.map((user, key) => (
-            <div key={key}>
-              <p>{user.name || user.identity.toHexString().substring(0, 8)}</p>
-            </div>
-          ))}
+          <p className="eyebrow">Space</p>
+          <h1>{spaceId}</h1>
         </div>
-        {offlineUsers.length > 0 && (
-          <div>
-            <h1>Offline</h1>
-            {offlineUsers.map((user, key) => (
-              <div key={key}>
-                <p>
-                  {user.name || user.identity.toHexString().substring(0, 8)}
-                </p>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-      <div className="new-message">
-        <form
-          onSubmit={onSubmitMessage}
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            width: '50%',
-            margin: '0 auto',
-          }}
-        >
-          <h3>New Message</h3>
-          <textarea
-            aria-label="message input"
-            value={newMessage}
-            onChange={e => setNewMessage(e.target.value)}
-          ></textarea>
-          <button type="submit">Send</button>
-        </form>
-      </div>
-    </div>
+        <div className="header-actions">
+          <span className={`save-status ${saveStatus}`}>
+            {saveStatus === 'idle' ? 'Ready' : saveStatus}
+          </span>
+          <button onClick={copyShareUrl}>Copy Link</button>
+        </div>
+      </header>
+
+      {!space && <p className="loading-note">Creating shared space...</p>}
+
+      <textarea
+        className="shared-editor"
+        aria-label="shared text editor"
+        value={localText}
+        onChange={event => setLocalText(event.target.value)}
+        placeholder="Start typing here. Everyone with this link can edit."
+        disabled={!space}
+      />
+    </main>
   );
 }
 

@@ -1,89 +1,75 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// IMPORTS
-// ─────────────────────────────────────────────────────────────────────────────
 import { schema, t, table, SenderError } from 'spacetimedb/server';
 
-const user = table(
-  { name: 'user', public: true },
+const MAX_SPACE_ID_LENGTH = 48;
+const MAX_TEXT_LENGTH = 100_000;
+const SPACE_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+
+const space = table(
+  { name: 'space', public: true },
   {
-    identity: t.identity().primaryKey(),
-    name: t.string().optional(),
-    online: t.bool(),
+    id: t.string().primaryKey(),
+    text: t.string(),
+    createdAt: t.timestamp(),
+    updatedAt: t.timestamp(),
+    updatedBy: t.identity(),
   }
 );
 
-const message = table(
-  { name: 'message', public: true },
-  { sender: t.identity(), sent: t.timestamp(), text: t.string() }
-);
-
-const spacetimedb = schema({ user, message });
+const spacetimedb = schema({ space });
 export default spacetimedb;
 
-function validateName(name: string) {
-  if (!name) throw new SenderError('Names must not be empty');
-}
-
-export const set_name = spacetimedb.reducer(
-  { name: t.string() },
-  (ctx, { name }) => {
-    validateName(name);
-    const user = ctx.db.user.identity.find(ctx.sender);
-    if (!user) throw new SenderError('Cannot set name for unknown user');
-    console.info(`User ${ctx.sender} sets name to ${name}`);
-    ctx.db.user.identity.update({ ...user, name });
+function validateSpaceId(id: string) {
+  if (!id) throw new SenderError('Space ID is required');
+  if (id.length > MAX_SPACE_ID_LENGTH) {
+    throw new SenderError('Space ID is too long');
   }
-);
-
-function validateMessage(text: string) {
-  if (!text) throw new SenderError('Messages must not be empty');
-}
-
-export const send_message = spacetimedb.reducer(
-  { text: t.string() },
-  (ctx, { text }) => {
-    // Things to consider:
-    // - Rate-limit messages per-user.
-    // - Reject messages from unnamed user.
-    validateMessage(text);
-    console.info(`User ${ctx.sender}: ${text}`);
-    ctx.db.message.insert({
-      sender: ctx.sender,
-      text,
-      sent: ctx.timestamp,
-    });
-  }
-);
-
-// Called when the module is initially published
-export const init = spacetimedb.init(_ctx => {});
-
-export const onConnect = spacetimedb.clientConnected(ctx => {
-  const user = ctx.db.user.identity.find(ctx.sender);
-  if (user) {
-    // If this is a returning user, i.e. we already have a `User` with this `Identity`,
-    // set `online: true`, but leave `name` and `identity` unchanged.
-    ctx.db.user.identity.update({ ...user, online: true });
-  } else {
-    // If this is a new user, create a `User` row for the `Identity`,
-    // which is online, but hasn't set a name.
-    ctx.db.user.insert({
-      name: undefined,
-      identity: ctx.sender,
-      online: true,
-    });
-  }
-});
-
-export const onDisconnect = spacetimedb.clientDisconnected(ctx => {
-  const user = ctx.db.user.identity.find(ctx.sender);
-  if (user) {
-    ctx.db.user.identity.update({ ...user, online: false });
-  } else {
-    // This branch should be unreachable,
-    // as it doesn't make sense for a client to disconnect without connecting first.
-    console.warn(
-      `Disconnect event for unknown user with identity ${ctx.sender}`
+  if (!SPACE_ID_PATTERN.test(id)) {
+    throw new SenderError(
+      'Space ID may only contain letters, numbers, hyphens, and underscores'
     );
   }
-});
+}
+
+function validateText(text: string) {
+  if (text.length > MAX_TEXT_LENGTH) {
+    throw new SenderError('Text is too long');
+  }
+}
+
+export const create_space = spacetimedb.reducer(
+  { id: t.string() },
+  (ctx, { id }) => {
+    validateSpaceId(id);
+
+    const existing = ctx.db.space.id.find(id);
+    if (existing) return;
+
+    ctx.db.space.insert({
+      id,
+      text: '',
+      createdAt: ctx.timestamp,
+      updatedAt: ctx.timestamp,
+      updatedBy: ctx.sender,
+    });
+  }
+);
+
+export const update_space_text = spacetimedb.reducer(
+  { id: t.string(), text: t.string() },
+  (ctx, { id, text }) => {
+    validateSpaceId(id);
+    validateText(text);
+
+    const existing = ctx.db.space.id.find(id);
+    if (!existing) throw new SenderError('Space not found');
+
+    ctx.db.space.id.update({
+      ...existing,
+      text,
+      updatedAt: ctx.timestamp,
+      updatedBy: ctx.sender,
+    });
+  }
+);
+
+export const init = spacetimedb.init(_ctx => {});

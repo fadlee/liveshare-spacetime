@@ -1,76 +1,120 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, it, expect } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
-import { SpacetimeDBProvider } from 'spacetimedb/react';
-import { DbConnection } from './module_bindings';
 
-describe('App Integration Test', () => {
-  it('connects to the DB, allows name change and message sending', async () => {
-    const connectionBuilder = DbConnection.builder()
-      .withUri('ws://localhost:3000')
-      .withDatabaseName('quickstart-chat')
-      .withToken(
-        localStorage.getItem(
-          'ws://localhost:3000/quickstart-chat/auth_token'
-        ) || ''
-      );
-    render(
-      <SpacetimeDBProvider connectionBuilder={connectionBuilder}>
-        <App />
-      </SpacetimeDBProvider>
+const createSpaceMock = vi.fn(() => Promise.resolve());
+const updateSpaceTextMock = vi.fn(() => Promise.resolve());
+let mockPathname = '/';
+let mockSpaces: Array<{ id: string; text: string }> = [];
+
+vi.mock('./module_bindings', () => ({
+  reducers: {
+    createSpace: 'createSpace',
+    updateSpaceText: 'updateSpaceText',
+  },
+  tables: {
+    space: {
+      where: vi.fn(() => 'spaceQuery'),
+    },
+  },
+}));
+
+vi.mock('spacetimedb/react', () => ({
+  useSpacetimeDB: () => ({
+    identity: { toHexString: () => 'abc123' },
+    isActive: true,
+  }),
+  useReducer: (reducer: string) => {
+    if (reducer === 'createSpace') return createSpaceMock;
+    if (reducer === 'updateSpaceText') return updateSpaceTextMock;
+    throw new Error(`Unexpected reducer ${reducer}`);
+  },
+  useTable: () => [mockSpaces, false],
+}));
+
+Object.defineProperty(window, 'location', {
+  value: {
+    get pathname() {
+      return mockPathname;
+    },
+    get href() {
+      return `http://localhost:5173${mockPathname}`;
+    },
+  },
+  writable: true,
+});
+
+describe('App', () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+    createSpaceMock.mockClear();
+    updateSpaceTextMock.mockClear();
+    mockPathname = '/';
+    mockSpaces = [];
+    vi.spyOn(window.history, 'pushState').mockImplementation(
+      (_data, _unused, url) => {
+        mockPathname = String(url);
+      }
     );
+    Object.defineProperty(globalThis, 'crypto', {
+      value: {
+        getRandomValues: (array: Uint8Array) => {
+          array.fill(1);
+          return array;
+        },
+      },
+      configurable: true,
+    });
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: vi.fn(() => Promise.resolve()) },
+      configurable: true,
+    });
+  });
 
-    // Initially, we should see "Connecting..."
-    expect(screen.getByText(/Connecting.../i)).toBeInTheDocument();
+  it('creates a random space from the landing page', async () => {
+    const user = userEvent.setup();
 
-    // Wait until "Connecting..." is gone (meaning we've connected)
-    // This might require the actual DB to accept the connection
-    await waitFor(
-      () =>
-        expect(screen.queryByText(/Connecting.../i)).not.toBeInTheDocument(),
-      { timeout: 10000 }
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: /create space/i }));
+
+    expect(window.history.pushState).toHaveBeenCalledWith(
+      null,
+      '',
+      expect.stringMatching(/^\/[A-Za-z0-9_-]{12}$/)
     );
-
-    // The profile section should show the default name or truncated identity
-    // For example, you can check if the text is rendered.
-    // If your default identity is something like 'abcdef12' or 'Unknown'
-    // we do a generic check:
     expect(
-      screen.getByRole('heading', { name: /profile/i })
-    ).toBeInTheDocument();
+      screen.getByRole('textbox', { name: /shared text editor/i })
+    ).toBeDisabled();
+  });
 
-    // Let's change the user's name
-    const editNameButton = screen.getByText(/Edit Name/i);
-    await userEvent.click(editNameButton);
+  it('creates a missing space when opening a shared URL', async () => {
+    mockPathname = '/abc123';
 
-    const nameInput = screen.getByRole('textbox', { name: /name input/i });
-    await userEvent.clear(nameInput);
-    await userEvent.type(nameInput, 'TestUser');
-    const submitNameButton = screen.getByRole('button', { name: /submit/i });
-    await userEvent.click(submitNameButton);
+    render(<App />);
 
-    // If your DB or UI updates instantly, we can check that the new name shows up
-    await waitFor(
-      () => {
-        expect(screen.getByText('TestUser')).toBeInTheDocument();
-      },
-      { timeout: 10000 }
+    await waitFor(() =>
+      expect(createSpaceMock).toHaveBeenCalledWith({ id: 'abc123' })
     );
+  });
 
-    // Now let's send a message
-    const textarea = screen.getByRole('textbox', { name: /message input/i });
-    await userEvent.type(textarea, 'Hello from GH Actions!');
+  it('saves textarea edits with reducer object syntax', async () => {
+    const user = userEvent.setup();
+    mockPathname = '/abc123';
+    mockSpaces = [{ id: 'abc123', text: 'Initial text' }];
 
-    const sendButton = screen.getByRole('button', { name: /send/i });
-    await userEvent.click(sendButton);
+    render(<App />);
+    const editor = screen.getByRole('textbox', { name: /shared text editor/i });
 
-    // Wait for message to appear in the UI
-    await waitFor(
-      () => {
-        expect(screen.getByText('Hello from GH Actions!')).toBeInTheDocument();
-      },
-      { timeout: 10000 }
-    );
+    await user.clear(editor);
+    await user.type(editor, 'Shared update');
+
+    await waitFor(() => {
+      expect(updateSpaceTextMock).toHaveBeenLastCalledWith({
+        id: 'abc123',
+        text: 'Shared update',
+      });
+    });
   });
 });
