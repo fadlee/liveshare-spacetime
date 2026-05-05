@@ -22,6 +22,10 @@ function getSpaceIdFromPath() {
   return path || null;
 }
 
+function isSpaceNotFound(error: unknown) {
+  return error instanceof Error && error.message.includes('Space not found');
+}
+
 function App() {
   const { identity, isActive: connected } = useSpacetimeDB();
   const createSpace = useReducer(reducers.createSpace);
@@ -96,6 +100,17 @@ function App() {
       updateSpaceText({ id: spaceId, text: localText })
         .then(() => setSaveStatus('saved'))
         .catch(error => {
+          if (isSpaceNotFound(error)) {
+            createSpace({ id: spaceId })
+              .then(() => updateSpaceText({ id: spaceId, text: localText }))
+              .then(() => setSaveStatus('saved'))
+              .catch(retryError => {
+                console.error('Failed to save text:', retryError);
+                setSaveStatus('error');
+              });
+            return;
+          }
+
           console.error('Failed to save text:', error);
           setSaveStatus('error');
         });
@@ -105,6 +120,7 @@ function App() {
   }, [
     canEdit,
     connected,
+    createSpace,
     localText,
     pendingCreateSpaceId,
     spaceId,

@@ -151,4 +151,28 @@ describe('App', () => {
       });
     });
   });
+
+  it('creates the space and retries once when saving finds no space', async () => {
+    const user = userEvent.setup();
+    mockPathname = '/abc123';
+    mockSpaces = [{ id: 'abc123', text: 'Initial text' }];
+    updateSpaceTextMock
+      .mockRejectedValueOnce(new Error('SenderError: Space not found'))
+      .mockResolvedValueOnce(undefined);
+
+    render(<App />);
+    const editor = screen.getByRole('textbox', { name: /shared text editor/i });
+
+    await user.clear(editor);
+    await user.type(editor, 'Recovered update');
+
+    await waitFor(() => {
+      expect(createSpaceMock).toHaveBeenCalledWith({ id: 'abc123' });
+      expect(updateSpaceTextMock).toHaveBeenLastCalledWith({
+        id: 'abc123',
+        text: 'Recovered update',
+      });
+      expect(updateSpaceTextMock).toHaveBeenCalledTimes(2);
+    });
+  });
 });
