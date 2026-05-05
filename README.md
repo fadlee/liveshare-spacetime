@@ -209,6 +209,36 @@ For a hosted deployment, deploy the Vite app with environment variables pointing
 
 The current module is public-by-link. Anyone with a space URL can view and edit that space.
 
+### Cloudflare Pages
+
+Cloudflare's dashboard may show `Create application` instead of a separate `Create Pages` button. Use this flow:
+
+1. Open Cloudflare Dashboard.
+2. Go to `Workers & Pages`.
+3. Click `Create application`.
+4. Choose the `Pages` tab.
+5. Select `Connect to Git`.
+6. Pick this repository and branch `main`.
+7. Use these build settings:
+
+| Setting | Value |
+| --- | --- |
+| Framework preset | `Vite` |
+| Build command | `bun install && bun run build` |
+| Build output directory | `dist` |
+| Root directory | empty / repository root |
+
+Set production environment variables:
+
+| Variable | Value |
+| --- | --- |
+| `VITE_SPACETIMEDB_HOST` | your SpacetimeDB websocket host, for example `wss://maincloud.spacetimedb.com` |
+| `VITE_SPACETIMEDB_DB_NAME` | `liveshare-db` |
+
+This repository includes `public/_redirects` so Cloudflare Pages serves `index.html` for deep links like `/abc123`.
+
+After deployment, create a space, copy the URL, and open the same URL in another tab to verify live updates.
+
 ## Current Limitations
 
 - No permissions, accounts, or passcodes.
